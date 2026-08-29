@@ -1,0 +1,49 @@
+{
+  "dataset": "IO-VNBD",
+  "feature_names": [
+    "velocity_mps",
+    "heading_deg",
+    "ws_fl",
+    "ws_fr",
+    "ws_rl",
+    "ws_rr",
+    "wheel_speed_avg",
+    "velocity_from_wheels_mps",
+    "yaw_rate",
+    "accel_long",
+    "accel_lat",
+    "steering_angle",
+    "engine_rpm",
+    "lat",
+    "lon",
+    "height_km"
+  ],
+  "target_names": [
+    "avg_velocity_mps",
+    "avg_direction_deg"
+  ],
+  "window_shape": [
+    64,
+    16
+  ],
+  "train_shape": [
+    3000,
+    64,
+    16
+  ],
+  "val_shape": [
+    1000,
+    64,
+    16
+  ],
+  "test_shape": [
+    1000,
+    64,
+    16
+  ],
+  "splits": {
+    "train_size": 3000,
+    "val_size": 1000,
+    "test_size": 1000
+  }
+}
