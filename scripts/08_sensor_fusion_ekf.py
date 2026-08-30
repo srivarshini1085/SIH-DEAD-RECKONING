@@ -59,7 +59,7 @@ class MLPredictor:
                              X_tr.std(axis=(0, 1)))  # (F,)
         input_size = X_tr.shape[-1]
 
-        self.model = SequenceRegressor(input_size, hidden_size=32, output_size=3)
+        self.model = SequenceRegressor(input_size, hidden_size=128, output_size=3)
         self.model.load_state_dict(torch.load(model_path, map_location="cpu"))
         self.model.eval()
 

@@ -54,10 +54,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-path", type=Path, default=DEFAULT_DATA_PATH, help="Path to the pre-generated windowed dataset .npz file.")
     parser.add_argument("--model-path", type=Path, default=DEFAULT_MODEL_PATH, help="Where to save the trained model.")
     parser.add_argument("--metrics-path", type=Path, default=DEFAULT_METRICS_PATH, help="Where to save the training metrics JSON.")
-    parser.add_argument("--epochs", type=int, default=20, help="Number of training epochs.")
-    parser.add_argument("--batch-size", type=int, default=32, help="Mini-batch size.")
-    parser.add_argument("--hidden-size", type=int, default=32, help="LSTM hidden size.")
+    parser.add_argument("--epochs", type=int, default=80, help="Number of training epochs.")
+    parser.add_argument("--batch-size", type=int, default=64, help="Mini-batch size.")
+    parser.add_argument("--hidden-size", type=int, default=128, help="LSTM hidden size.")
     parser.add_argument("--learning-rate", type=float, default=1e-3, help="Adam learning rate.")
+    parser.add_argument("--patience", type=int, default=15, help="Early stopping patience.")
     return parser.parse_args()
 
 
@@ -156,8 +157,9 @@ def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray):
     }
 
 
-def train_model(X_train, y_train, X_val, y_val, hidden_size=32, learning_rate=1e-3, epochs=20, batch_size=32):
+def train_model(X_train, y_train, X_val, y_val, hidden_size=128, learning_rate=1e-3, epochs=80, batch_size=64, patience=15):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Training on: {device}")
     X_train_t = torch.tensor(X_train, dtype=torch.float32).to(device)
     y_train_t = torch.tensor(y_train, dtype=torch.float32).to(device)
     X_val_t = torch.tensor(X_val, dtype=torch.float32).to(device)
@@ -171,9 +173,13 @@ def train_model(X_train, y_train, X_val, y_val, hidden_size=32, learning_rate=1e
 
     loader = DataLoader(TensorDataset(X_train_t, y_train_t), batch_size=batch_size, shuffle=True)
     criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-5)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5, min_lr=1e-5)
 
     history = {"train_loss": [], "val_loss": []}
+    best_val_loss = float("inf")
+    best_state = None
+    no_improve = 0
 
     for epoch in range(epochs):
         model.train()
@@ -183,6 +189,7 @@ def train_model(X_train, y_train, X_val, y_val, hidden_size=32, learning_rate=1e
             pred = model(xb)
             loss = criterion(pred, yb)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             running_loss += loss.item() * xb.size(0)
 
@@ -192,10 +199,22 @@ def train_model(X_train, y_train, X_val, y_val, hidden_size=32, learning_rate=1e
             val_pred = model(X_val_t)
             val_loss = criterion(val_pred, y_val_t).item()
 
+        scheduler.step(val_loss)
         history["train_loss"].append(float(train_loss))
         history["val_loss"].append(float(val_loss))
-        print(f"Epoch {epoch + 1:02d}/{epochs} | train_loss={train_loss:.6f} | val_loss={val_loss:.6f}")
+        print(f"Epoch {epoch + 1:02d}/{epochs} | train={train_loss:.6f} | val={val_loss:.6f} | lr={optimizer.param_groups[0]['lr']:.2e}")
 
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            no_improve = 0
+        else:
+            no_improve += 1
+            if no_improve >= patience:
+                print(f"Early stopping at epoch {epoch + 1} (best val={best_val_loss:.6f})")
+                break
+
+    model.load_state_dict(best_state)
     model.eval()
     with torch.no_grad():
         val_pred = model(X_val_t).cpu().numpy()
@@ -210,7 +229,7 @@ def main():
     args = parse_args()
     dataset = load_windowed_dataset(args.data_path)
 
-    X_train, X_val, X_test, _, _ = normalize_features(
+    X_train, X_val, X_test, mean, std = normalize_features(
         dataset["X_train"],
         dataset["X_val"],
         dataset["X_test"],
@@ -241,10 +260,16 @@ def main():
         learning_rate=args.learning_rate,
         epochs=args.epochs,
         batch_size=args.batch_size,
+        patience=args.patience,
     )
 
     args.model_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), args.model_path)
+
+    # Save normalization stats so inference scripts use the same mean/std
+    stats_path = args.model_path.parent / "normalization_stats.npz"
+    np.savez(stats_path, mean=mean, std=std, input_size=np.array([dataset["X_train"].shape[-1]]))
+    print(f"Saved normalization stats to: {stats_path}")
 
     args.metrics_path.parent.mkdir(parents=True, exist_ok=True)
     with open(args.metrics_path, "w", encoding="utf-8") as f:

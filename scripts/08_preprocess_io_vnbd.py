@@ -218,85 +218,66 @@ def prepare_sensor_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_feature_columns() -> list:
-    """Define features for ML input from telemetry data."""
+    """Define features for ML input — NO leakage of labels (heading/velocity/position)."""
     return [
-        "velocity_mps",  # GPS velocity (ground truth)
-        "heading_deg",   # GPS heading (ground truth - will be labels)
-        "ws_fl", "ws_fr", "ws_rl", "ws_rr",  # Wheel speeds (4)
-        "wheel_speed_avg", "velocity_from_wheels_mps",  # Derived wheel velocity (2)
-        "yaw_rate",      # Yaw rotation rate
-        "accel_long",    # Longitudinal acceleration
-        "accel_lat",     # Lateral acceleration
-        "steering_angle", # Steering input
-        "engine_rpm",    # Engine speed
-        "lat", "lon",    # GPS position (2)
-        "height_km",     # Altitude
+        "ws_fl", "ws_fr", "ws_rl", "ws_rr",          # Wheel speeds (4) — IMU-available
+        "wheel_speed_avg", "velocity_from_wheels_mps", # Derived wheel velocity (2)
+        "yaw_rate",                                    # Yaw rotation rate
+        "accel_long",                                  # Longitudinal acceleration
+        "accel_lat",                                   # Lateral acceleration
+        "steering_angle",                              # Steering input
+        "engine_rpm",                                  # Engine speed
+        "height_km",                                   # Altitude (barometer proxy)
     ]
 
 
-def compute_filtered_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Apply low-pass filtering and derive features."""
+def compute_filtered_features(df: pd.DataFrame):
+    """Apply low-pass filtering and derive features. Returns (feature_df, labels_df)."""
     df = prepare_sensor_dataframe(df)
-    
-    # Estimate sampling frequency
+
     if len(df) > 1 and "t" in df.columns:
         time_diff = np.diff(df["t"].dropna().to_numpy())
         fs = 1.0 / np.median(time_diff) if len(time_diff) > 0 else 50.0
     else:
         fs = 50.0
-    
     fs = max(fs, 1.0)
-    
-    # Get all available feature columns
+
     feature_cols = [c for c in build_feature_columns() if c in df.columns]
     filtered = df[feature_cols].copy()
-    
-    # Apply low-pass filter to all features (optional for telemetry)
     for col in feature_cols:
-        if col in filtered.columns:
-            try:
-                filtered[col] = low_pass_filter(filtered[col].to_numpy(), fs=fs, cutoff_hz=5.0)
-            except:
-                pass  # Keep original if filter fails
-    
-    return filtered
+        try:
+            filtered[col] = low_pass_filter(filtered[col].to_numpy(), fs=fs, cutoff_hz=5.0)
+        except:
+            pass
+
+    # Labels: GPS velocity and heading — kept separate, never in X
+    labels = df[["velocity_mps", "heading_deg"]].copy()
+    return filtered, labels
 
 
-def create_windows(features_df: pd.DataFrame, window_size: int, step_size: int, feature_names: list):
-    """Create fixed-size windows for LSTM input."""
+def create_windows(features_df: pd.DataFrame, labels_df: pd.DataFrame, window_size: int, step_size: int, feature_names: list):
+    """Create fixed-size windows for LSTM input. Labels come from separate GPS columns."""
     if len(features_df) < window_size:
         raise ValueError(f"Dataset too small for window_size={window_size}. Got {len(features_df)} samples.")
-    
+
     feature_array = features_df[feature_names].to_numpy(dtype=np.float64)
-    
-    # Handle NaNs
     if np.isnan(feature_array).any():
         feature_array = np.nan_to_num(feature_array, nan=0.0, posinf=0.0, neginf=0.0)
-    
-    X_windows = []
-    y_windows = []
-    
-    # Find target indices (telemetry has velocity_mps and heading_deg)
-    vel_ix = feature_names.index("velocity_mps") if "velocity_mps" in feature_names else None
-    heading_ix = feature_names.index("heading_deg") if "heading_deg" in feature_names else None
-    
+
+    vel_array = labels_df["velocity_mps"].to_numpy(dtype=np.float64)
+    hdg_array = labels_df["heading_deg"].to_numpy(dtype=np.float64)
+
+    X_windows, y_windows = [], []
     for start in range(0, len(feature_array) - window_size + 1, step_size):
         window = feature_array[start:start + window_size]
-        
         if np.isnan(window).any():
             continue
-        
         X_windows.append(window)
-        
-        # Extract labels (mean velocity and heading from GPS telemetry)
-        if vel_ix is not None and heading_ix is not None:
-            velocity = float(np.mean(window[:, vel_ix]))
-            heading = float(np.mean(window[:, heading_ix]))
-            y_windows.append([velocity, heading])
-    
+        y_windows.append([float(np.mean(vel_array[start:start + window_size])),
+                          float(np.mean(hdg_array[start:start + window_size]))])
+
     if len(X_windows) == 0:
         raise ValueError("No valid windows created from dataset.")
-    
     return np.asarray(X_windows, dtype=np.float64), np.asarray(y_windows, dtype=np.float64)
 
 
@@ -402,12 +383,12 @@ def main():
     
     # Process features
     print("\nProcessing features (filtering, interpolation, magnitudes)...")
-    feature_df = compute_filtered_features(merged)
+    feature_df, labels_df = compute_filtered_features(merged)
     feature_columns = list(feature_df.columns)
-    
+
     # Create windows
     print(f"\nCreating windows (size={args.window_size}, step={args.step_size})...")
-    X, y = create_windows(feature_df, args.window_size, args.step_size, feature_columns)
+    X, y = create_windows(feature_df, labels_df, args.window_size, args.step_size, feature_columns)
     print(f"  Created {len(X)} windows")
     
     # Split

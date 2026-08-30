@@ -76,7 +76,7 @@ def physics_baseline(X):
 
 
 def load_model_and_predict(X_test, mean, std):
-    model = SequenceRegressor(input_size=X_test.shape[-1], hidden_size=32, output_size=3)
+    model = SequenceRegressor(input_size=X_test.shape[-1], hidden_size=128, output_size=3)
     state = torch.load(MODEL_PATH, map_location="cpu")
     model.load_state_dict(state)
     model.eval()

@@ -27,7 +27,8 @@ from torch import nn
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_PATH = ROOT / "models" / "lstm_velocity_direction_io_vnbd.pt"
-STATS_PATH = ROOT / "data" / "processed" / "windowed_dataset_IO-VNBD.npz"
+STATS_PATH = ROOT / "models" / "normalization_stats.npz"
+DATA_PATH  = ROOT / "data" / "processed" / "windowed_dataset_IO-VNBD.npz"
 
 
 class SequenceRegressor(nn.Module):
@@ -62,78 +63,39 @@ def decode_direction_from_sin_cos(vec):
 class DeadReckoningPredictor:
     def __init__(self, model_path=MODEL_PATH, stats_path=STATS_PATH):
         self.device = torch.device("cpu")
-        
-        # Load normalization statistics from training data
-        data = np.load(stats_path)
-        X_train = data["X_train"]
-        self.mean = X_train.mean(axis=(0, 1), keepdims=True)
-        self.std = X_train.std(axis=(0, 1), keepdims=True)
-        self.std = np.where(self.std < 1e-8, 1.0, self.std)
-        
-        # Load model (input_size from data shape)
-        input_size = X_train.shape[-1]  # Get from actual data
-        self.model = SequenceRegressor(input_size=input_size, hidden_size=32, output_size=3).to(self.device)
+
+        # Load normalization statistics (saved by training script)
+        stats = np.load(stats_path)
+        self.mean = stats["mean"]   # shape (1, 1, F)
+        self.std  = stats["std"]    # shape (1, 1, F)
+        input_size = int(stats["input_size"][0])
+
+        self.model = SequenceRegressor(input_size=input_size, hidden_size=128, output_size=3).to(self.device)
         state = torch.load(model_path, map_location=self.device)
         self.model.load_state_dict(state)
         self.model.eval()
 
     def predict(self, sensor_window):
-        """
-        Predict velocity and direction from a sensor window.
-        
-        Args:
-            sensor_window: np.ndarray of shape (64, num_features) with 64 timesteps and sensor features
-        
-        Returns:
-            dict with 'velocity_mps' and 'direction_deg'
-        """
         expected_features = self.mean.shape[-1]
         if sensor_window.shape[0] != 64 or sensor_window.shape[1] != expected_features:
             raise ValueError(f"Expected shape (64, {expected_features}), got {sensor_window.shape}")
-        
-        # Normalize using training statistics (mean and std have shape (1, 1, 20))
+
         X_norm = (sensor_window - self.mean.squeeze()) / self.std.squeeze()
-        
-        # Convert to torch tensor and predict (add batch dimension)
         with torch.no_grad():
             X_t = torch.tensor(X_norm, dtype=torch.float32).unsqueeze(0).to(self.device)
             pred = self.model(X_t).cpu().numpy()
-        
-        # Decode predictions (pred has shape (1, 3))
+
         velocity = float(pred[0, 0])
-        sin_cos = pred[0, 1:].reshape(1, 2)  # Shape (1, 2)
+        sin_cos = pred[0, 1:].reshape(1, 2)
         direction = float(decode_direction_from_sin_cos(sin_cos)[0])
-        
-        return {
-            "velocity_mps": velocity,
-            "direction_deg": direction,
-            "raw_output": pred[0]  # [velocity, sin_heading, cos_heading]
-        }
+        return {"velocity_mps": velocity, "direction_deg": direction, "raw_output": pred[0]}
 
     def predict_batch(self, sensor_windows):
-        """
-        Predict velocity and direction for multiple windows.
-        
-        Args:
-            sensor_windows: np.ndarray of shape (N, 64, 20)
-        
-        Returns:
-            np.ndarray of shape (N, 2) with [velocity, direction] for each window
-        """
-        if len(sensor_windows.shape) != 3 or sensor_windows.shape[1:] != (64, 20):
-            raise ValueError(f"Expected shape (N, 64, 20), got {sensor_windows.shape}")
-        
-        # Normalize (mean and std have shape (1, 1, 20))
         X_norm = (sensor_windows - self.mean) / self.std
-        
         with torch.no_grad():
             X_t = torch.tensor(X_norm, dtype=torch.float32).to(self.device)
             pred = self.model(X_t).cpu().numpy()
-        
-        vel = pred[:, 0]
-        dir_deg = decode_direction_from_sin_cos(pred[:, 1:])
-        
-        return np.column_stack([vel, dir_deg])
+        return np.column_stack([pred[:, 0], decode_direction_from_sin_cos(pred[:, 1:])])
 
 
 def main():

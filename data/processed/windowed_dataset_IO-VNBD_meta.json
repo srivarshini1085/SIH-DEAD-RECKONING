@@ -1,8 +1,6 @@
 {
   "dataset": "IO-VNBD",
   "feature_names": [
-    "velocity_mps",
-    "heading_deg",
     "ws_fl",
     "ws_fr",
     "ws_rl",
@@ -14,8 +12,6 @@
     "accel_lat",
     "steering_angle",
     "engine_rpm",
-    "lat",
-    "lon",
     "height_km"
   ],
   "target_names": [
@@ -24,22 +20,22 @@
   ],
   "window_shape": [
     64,
-    16
+    12
   ],
   "train_shape": [
     3000,
     64,
-    16
+    12
   ],
   "val_shape": [
     1000,
     64,
-    16
+    12
   ],
   "test_shape": [
     1000,
     64,
-    16
+    12
   ],
   "splits": {
     "train_size": 3000,
