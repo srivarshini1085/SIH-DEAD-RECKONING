@@ -255,6 +255,14 @@ def compute_filtered_features(df: pd.DataFrame):
     return filtered, labels
 
 
+def circular_mean_deg(degrees: np.ndarray) -> float:
+    rad = np.deg2rad(degrees)
+    sin_mean = np.mean(np.sin(rad))
+    cos_mean = np.mean(np.cos(rad))
+    angle = np.rad2deg(np.arctan2(sin_mean, cos_mean))
+    return float(angle % 360.0)
+
+
 def create_windows(features_df: pd.DataFrame, labels_df: pd.DataFrame, window_size: int, step_size: int, feature_names: list):
     """Create fixed-size windows for LSTM input. Labels come from separate GPS columns."""
     if len(features_df) < window_size:
@@ -273,8 +281,10 @@ def create_windows(features_df: pd.DataFrame, labels_df: pd.DataFrame, window_si
         if np.isnan(window).any():
             continue
         X_windows.append(window)
-        y_windows.append([float(np.mean(vel_array[start:start + window_size])),
-                          float(np.mean(hdg_array[start:start + window_size]))])
+        y_windows.append([
+            float(np.mean(vel_array[start:start + window_size])),
+            circular_mean_deg(hdg_array[start:start + window_size])
+        ])
 
     if len(X_windows) == 0:
         raise ValueError("No valid windows created from dataset.")

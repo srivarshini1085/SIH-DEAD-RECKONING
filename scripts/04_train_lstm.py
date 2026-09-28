@@ -40,6 +40,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -130,6 +131,29 @@ class SequenceRegressor(nn.Module):
         return self.head(self.dropout(last_step))
 
 
+def combined_loss(pred, target):
+    # Velocity loss
+    velocity_loss = F.huber_loss(
+        pred[:, 0],
+        target[:, 0]
+    )
+
+    # Direction loss using sine/cosine vectors
+    pred_direction = F.normalize(pred[:, 1:], dim=1)
+    true_direction = F.normalize(target[:, 1:], dim=1)
+
+    direction_loss = (
+        1.0
+        - F.cosine_similarity(
+            pred_direction,
+            true_direction,
+            dim=1
+        ).mean()
+    )
+
+    return velocity_loss + direction_loss
+
+
 def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray):
     if y_true.shape[-1] == 3 and y_pred.shape[-1] == 3:
         vel_true = y_true[:, 0]
@@ -172,7 +196,7 @@ def train_model(X_train, y_train, X_val, y_val, hidden_size=128, learning_rate=1
     ).to(device)
 
     loader = DataLoader(TensorDataset(X_train_t, y_train_t), batch_size=batch_size, shuffle=True)
-    criterion = nn.MSELoss()
+    criterion = combined_loss
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5, min_lr=1e-5)
 
