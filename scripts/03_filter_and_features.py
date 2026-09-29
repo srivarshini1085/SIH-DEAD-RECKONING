@@ -8,7 +8,8 @@ from scipy.signal import butter, filtfilt
 from sklearn.model_selection import train_test_split
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_INPUT = ROOT / "data" / "processed" / "aligned_sensor_data.csv"
+DEFAULT_INPUT            = ROOT / "data" / "processed" / "aligned_sensor_data.csv"
+CALIBRATED_INPUT         = ROOT / "data" / "processed" / "calibrated_sensor_data.csv"
 DEFAULT_OUTPUT = ROOT / "data" / "processed" / "windowed_dataset.npz"
 DEFAULT_META = ROOT / "data" / "processed" / "windowed_dataset_meta.json"
 
@@ -20,6 +21,12 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_INPUT,
         help="Path to aligned sensor CSV file.",
+    )
+    parser.add_argument(
+        "--calibrated",
+        action="store_true",
+        help="Read from calibrated_sensor_data.csv (output of 10_calibration.py) "
+             "instead of aligned_sensor_data.csv.",
     )
     parser.add_argument(
         "--output-npz",
@@ -164,10 +171,17 @@ def save_arrays(output_npz: Path, X_train, X_val, X_test, y_train, y_val, y_test
 
 if __name__ == "__main__":
     args = parse_args()
-    if not args.input_csv.exists():
-        raise FileNotFoundError(f"Input CSV not found: {args.input_csv}")
+    input_csv = args.input_csv
+    if args.calibrated and CALIBRATED_INPUT.exists():
+        input_csv = CALIBRATED_INPUT
+        print(f"Using calibrated input: {input_csv}")
+    elif args.calibrated:
+        print(f"WARNING: --calibrated set but {CALIBRATED_INPUT} not found. "
+              f"Run 10_calibration.py first. Falling back to {input_csv}")
+    if not input_csv.exists():
+        raise FileNotFoundError(f"Input CSV not found: {input_csv}")
 
-    df = pd.read_csv(args.input_csv)
+    df = pd.read_csv(input_csv)
     feature_df = compute_filtered_features(df)
     feature_columns = list(feature_df.columns)
 
@@ -185,7 +199,7 @@ if __name__ == "__main__":
     with open(args.meta_json, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
 
-    print(f"Input dataset: {args.input_csv}")
+    print(f"Input dataset: {input_csv}")
     print(f"Saved arrays to: {args.output_npz}")
     print(f"Saved metadata to: {args.meta_json}")
     print(f"Feature count: {len(feature_columns)}")
